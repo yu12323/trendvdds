@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+pydantic
+pillow
+transformers
+safetensors
+accelerate
+sentencepiece
+peft
+git+https://github.com/huggingface/diffusers
