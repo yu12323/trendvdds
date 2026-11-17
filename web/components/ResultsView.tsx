@@ -10,7 +10,7 @@ interface ResultsViewProps {
   resultData: {
     images: string[];
     captions: string[];
-    sources: Array<'fooocus' | 'comfyui' | 'original'>;
+    sources: Array<'fooocus' | 'comfyui' | 'qwen' | 'original'>;
     tiktokTitle: string;
   };
 }
@@ -27,9 +27,19 @@ export default function ResultsView({
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadSaved, setDownloadSaved] = useState(false);
   const generatedSources = resultData.sources.filter((source) => source !== 'original');
-  const generatedBackend = generatedSources[0];
+  const distinctGeneratedSources = generatedSources.filter(
+    (source, index) => generatedSources.indexOf(source) === index
+  );
   const generatedLabel =
-    generatedBackend === 'comfyui' ? 'ComfyUI' : generatedBackend === 'fooocus' ? 'Fooocus' : 'IA';
+    distinctGeneratedSources.length > 1
+      ? 'IA'
+      : distinctGeneratedSources[0] === 'qwen'
+      ? 'Qwen'
+      : distinctGeneratedSources[0] === 'comfyui'
+      ? 'ComfyUI'
+      : distinctGeneratedSources[0] === 'fooocus'
+      ? 'Fooocus'
+      : 'IA';
 
   const handleCopyTitle = () => {
     navigator.clipboard.writeText(resultData.tiktokTitle);
@@ -139,7 +149,13 @@ export default function ResultsView({
             >
               {resultData.sources[idx] === 'original'
                 ? 'Foto original'
-                : `Gerada pelo ${resultData.sources[idx] === 'comfyui' ? 'ComfyUI' : 'Fooocus'}`}
+                : `Gerada pelo ${
+                    resultData.sources[idx] === 'qwen'
+                      ? 'Qwen'
+                      : resultData.sources[idx] === 'comfyui'
+                      ? 'ComfyUI'
+                      : 'Fooocus'
+                  }`}
             </span>
 
             {/* Single image download button */}

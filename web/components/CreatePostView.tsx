@@ -39,6 +39,7 @@ interface CreatePostViewProps {
     postType: 'UGLY_TO_BEAUTIFUL' | 'BEAUTIFUL_TO_UGLY';
     captions: string[];
     userPhotoUrl?: string;
+    qwenImagesBySlot: Record<number, string>;
   }, onProgress: (completed: number, total: number) => void) => Promise<void>;
   onOpenBid: (auctionId: string) => void;
   onOpenAddTrait: () => void;
@@ -52,6 +53,16 @@ interface CreatePostViewProps {
   onRemoveContainer: (index: number) => void;
   userPhoto: string | null;
   onUploadUserPhoto: (url: string) => void;
+  qwenImagesBySlot: Record<number, string>;
+  onAcceptQwenImage: (imageIndex: number, image: string) => void;
+  onRemoveQwenImage: (imageIndex: number) => void;
+}
+
+interface QwenApiResponse {
+  success: boolean;
+  image?: string;
+  seed?: number;
+  error?: string;
 }
 
 export default function CreatePostView({
@@ -68,6 +79,9 @@ export default function CreatePostView({
   onRemoveContainer,
   userPhoto,
   onUploadUserPhoto,
+  qwenImagesBySlot,
+  onAcceptQwenImage,
+  onRemoveQwenImage,
 }: CreatePostViewProps) {
   const [postType, setPostType] = useState<'UGLY_TO_BEAUTIFUL' | 'BEAUTIFUL_TO_UGLY'>(
     'UGLY_TO_BEAUTIFUL'
@@ -89,6 +103,14 @@ export default function CreatePostView({
   const [isGeneratingPost, setIsGeneratingPost] = useState(false);
   const [generationError, setGenerationError] = useState('');
   const [generationProgress, setGenerationProgress] = useState('');
+  const [isGeneratingQwen, setIsGeneratingQwen] = useState(false);
+  const [qwenError, setQwenError] = useState('');
+  const [qwenReferenceConfirmed, setQwenReferenceConfirmed] = useState(false);
+  const [pendingQwenImage, setPendingQwenImage] = useState<{
+    image: string;
+    seed?: number;
+    targetIndex: number;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // The user photo slot is ALWAYS the last container
@@ -116,6 +138,9 @@ export default function CreatePostView({
   ];
 
   const getContainerPhoto = (idx: number) => {
+    if (qwenImagesBySlot[idx]) {
+      return qwenImagesBySlot[idx];
+    }
     if (userPhoto) {
       return userPhoto;
     }
@@ -202,6 +227,7 @@ export default function CreatePostView({
         postType,
         captions: captions.slice(0, containersCount),
         userPhotoUrl: userPhoto || undefined,
+        qwenImagesBySlot,
       }, (completed, total) => {
         setGenerationProgress(`Servidor concluiu ${completed} de ${total} imagens.`);
       });
@@ -216,6 +242,79 @@ export default function CreatePostView({
 
   const currentTraits = imageTraitsMap[selectedThumb] || [];
   const isSelectedUserPhoto = selectedThumb === userPhotoIndex;
+  const qwenTargetTraits = currentTraits
+    .filter((trait) => trait.enabled && trait.isBeauty === (postType === 'UGLY_TO_BEAUTIFUL'))
+    .map((trait) => trait.name);
+  const qwenReferenceImage = userPhoto;
+  const isQwenTargetAvailable = selectedThumb !== userPhotoIndex;
+
+  const handleQwenRequest = async () => {
+    const targetIndex = selectedThumb;
+    if (targetIndex === userPhotoIndex) {
+      setQwenError('O último espaço fica reservado para sua foto original. Escolha outro espaço.');
+      return;
+    }
+
+    if (!qwenReferenceImage) {
+      setQwenError('Envie sua foto antes de editar com o Qwen.');
+      return;
+    }
+
+    if (!qwenReferenceConfirmed) {
+      setQwenError('Confirme que deseja enviar sua foto original como referência para o Qwen.');
+      return;
+    }
+
+    const direction =
+      postType === 'UGLY_TO_BEAUTIFUL' ? 'de uma aparência simples para uma mais bonita' : 'de uma aparência bonita para uma mais desleixada';
+    const traitsText = qwenTargetTraits.length > 0
+      ? qwenTargetTraits.join(', ')
+      : 'uma aparência natural e coerente com a transformação';
+    const captionContext = captions[targetIndex]?.trim();
+    const captionInstruction = captionContext
+      ? `Use esta legenda apenas como contexto, sem escrever palavras na imagem: "${captionContext}".`
+      : '';
+    const instruction = `Edite a imagem de referência para uma transformação de ${direction}. Aplique estas características: ${traitsText}. ${captionInstruction} Preserve a identidade e os elementos não mencionados. Não inclua texto, letras ou marca d'água.`;
+
+    setQwenError('');
+    setIsGeneratingQwen(true);
+    try {
+      const response = await fetch('/api/generate-image-qwen', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'edit',
+          image: qwenReferenceImage,
+          instruction,
+          steps: 28,
+          lora: 'none',
+        }),
+      });
+      const result = (await response.json()) as QwenApiResponse;
+      if (!response.ok || result.success !== true || typeof result.image !== 'string') {
+        throw new Error(result.error || 'Não foi possível gerar a imagem com Qwen.');
+      }
+
+      setPendingQwenImage({
+        image: result.image,
+        seed: result.seed,
+        targetIndex,
+      });
+    } catch (error) {
+      setQwenError(error instanceof Error ? error.message : 'Falha ao falar com o serviço Qwen.');
+    } finally {
+      setIsGeneratingQwen(false);
+    }
+  };
+
+  const handleAcceptQwenImage = () => {
+    if (!pendingQwenImage) return;
+    onAcceptQwenImage(pendingQwenImage.targetIndex, pendingQwenImage.image);
+    setSelectedThumb(pendingQwenImage.targetIndex);
+    setPendingQwenImage(null);
+    setQwenReferenceConfirmed(false);
+    setQwenError('');
+  };
 
   const filteredSuggestions = traitSuggestions.filter((s) => {
     const matchesSearch =
@@ -322,7 +421,11 @@ export default function CreatePostView({
         />
 
         {/* The uploaded photo is the source image for all generated containers. */}
-        {userPhoto ? (
+        {qwenImagesBySlot[selectedThumb] ? (
+          <div className="absolute top-3 left-3 bg-violet-700 text-white text-[10px] font-black uppercase px-2.5 py-1 rounded-full shadow-md">
+            Imagem Qwen aceita
+          </div>
+        ) : userPhoto ? (
           <div className="absolute top-3 left-3 bg-[#00A86B] text-white text-[10px] font-black uppercase px-2.5 py-1 rounded-full shadow-md flex items-center gap-1">
             <Camera className="w-3 h-3" />
             <span>Foto-base para geração</span>
@@ -362,6 +465,127 @@ export default function CreatePostView({
         )}
       </div>
 
+      <section className="rounded-2xl border border-violet-200 bg-violet-50/70 p-4 space-y-3">
+        <div>
+          <h3 className="font-bold text-sm text-gray-900">Gerar imagem com Qwen</h3>
+          <p className="mt-1 text-xs text-gray-600">
+            Edita sua foto enviada com os traços ativos e a legenda como contexto. Marque a confirmação para enviá-la ao Qwen.
+          </p>
+        </div>
+        {!isQwenTargetAvailable ? (
+          <p className="text-xs text-amber-800">
+            O último espaço fica reservado para sua foto original. Selecione outro espaço para usar o Qwen.
+          </p>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={handleQwenRequest}
+              disabled={isGeneratingQwen}
+              className="w-full rounded-xl bg-violet-700 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-violet-800 disabled:cursor-wait disabled:opacity-60"
+            >
+              {isGeneratingQwen ? 'Gerando prévia com Qwen…' : 'Gerar com Qwen'}
+            </button>
+            {qwenReferenceImage ? (
+              <div className="space-y-2 rounded-xl border border-violet-200 bg-white p-3">
+                <label className="flex items-start gap-2 text-xs text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={qwenReferenceConfirmed}
+                    onChange={(event) => {
+                      setQwenReferenceConfirmed(event.target.checked);
+                      setQwenError('');
+                    }}
+                    disabled={isGeneratingQwen}
+                    className="mt-0.5 accent-violet-700"
+                  />
+                  <span>
+                    Quero enviar minha foto original ao Qwen para editar esta variação.
+                  </span>
+                </label>
+                <button
+                  type="button"
+                  onClick={handleQwenRequest}
+                  disabled={isGeneratingQwen || !qwenReferenceConfirmed}
+                  className="w-full rounded-xl border border-violet-300 px-4 py-2 text-sm font-semibold text-violet-800 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isGeneratingQwen ? 'Editando com Qwen…' : 'Editar esta foto com Qwen'}
+                </button>
+              </div>
+            ) : null}
+          </>
+        )}
+        {isGeneratingQwen ? (
+          <p role="status" aria-live="polite" className="text-xs text-violet-800">
+            O serviço está gerando a prévia. Isso pode levar alguns minutos.
+          </p>
+        ) : null}
+        {qwenError ? (
+          <p role="alert" className="text-xs text-red-700">{qwenError}</p>
+        ) : null}
+        {pendingQwenImage ? (
+          <div className="space-y-3 rounded-xl border border-violet-200 bg-white p-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold text-gray-800">
+                Prévia para a Foto {pendingQwenImage.targetIndex + 1}
+                {pendingQwenImage.seed !== undefined ? ` · Seed ${pendingQwenImage.seed}` : ''}
+              </p>
+              {qwenImagesBySlot[pendingQwenImage.targetIndex] ? (
+                <button
+                  type="button"
+                  onClick={() => onRemoveQwenImage(pendingQwenImage.targetIndex)}
+                  disabled={isGeneratingQwen}
+                  className="text-xs font-semibold text-red-700 hover:underline disabled:opacity-50"
+                >
+                  Restaurar imagem anterior
+                </button>
+              ) : null}
+            </div>
+            <img
+              src={pendingQwenImage.image}
+              alt={`Prévia Qwen para a foto ${pendingQwenImage.targetIndex + 1}`}
+              className="max-h-80 w-full rounded-lg bg-gray-100 object-contain"
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={handleAcceptQwenImage}
+                disabled={isGeneratingQwen}
+                className="rounded-xl bg-[#00A86B] px-3 py-2 text-xs font-bold text-white hover:bg-[#046A4E] disabled:opacity-50"
+              >
+                Aceitar na Foto {pendingQwenImage.targetIndex + 1}
+              </button>
+              <button
+                type="button"
+                onClick={handleQwenRequest}
+                disabled={isGeneratingQwen || !qwenReferenceConfirmed}
+                className="rounded-xl border border-violet-300 px-3 py-2 text-xs font-bold text-violet-800 hover:bg-violet-100 disabled:opacity-50"
+              >
+                Gerar outra prévia
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => setPendingQwenImage(null)}
+              disabled={isGeneratingQwen}
+              className="w-full py-1 text-xs font-semibold text-gray-500 hover:text-gray-800 disabled:opacity-50"
+            >
+              Descartar prévia
+            </button>
+          </div>
+        ) : null}
+        {qwenImagesBySlot[selectedThumb] ? (
+          <button
+            type="button"
+            onClick={() => onRemoveQwenImage(selectedThumb)}
+            disabled={isGeneratingQwen}
+            className="w-full rounded-xl border border-gray-300 bg-white px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+          >
+            Remover imagem Qwen desta foto
+          </button>
+        ) : null}
+      </section>
+
       {/* 4. CONTAINERS ROW COM THUMBNAILS + BOTÃO "+1" */}
       <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-2">
         {Array.from({ length: containersCount }).map((_, idx) => {
@@ -371,7 +595,11 @@ export default function CreatePostView({
           return (
             <div
               key={idx}
-              onClick={() => setSelectedThumb(idx)}
+              onClick={() => {
+                setSelectedThumb(idx);
+                setQwenReferenceConfirmed(false);
+                setQwenError('');
+              }}
               className="flex flex-col items-center flex-shrink-0 cursor-pointer"
             >
               <div

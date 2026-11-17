@@ -52,7 +52,10 @@ async function generateImage(body: QwenGenerateRequest): Promise<QwenResponse> {
     const response = await Promise.race([
       fetch(`${config.apiUrl}/api/generate`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${config.apiToken}`,
+        },
         body: JSON.stringify({
           prompt: body.prompt,
           size: body.size,
@@ -102,7 +105,10 @@ async function editImage(body: QwenEditRequest): Promise<QwenResponse> {
     const response = await Promise.race([
       fetch(`${config.apiUrl}/api/edit`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${config.apiToken}`,
+        },
         body: JSON.stringify({
           image: body.image,
           instruction: body.instruction,

@@ -21,6 +21,7 @@ import sys
 import io
 import base64
 import random
+import hmac
 import logging
 import traceback
 import threading
@@ -30,7 +31,7 @@ from contextlib import asynccontextmanager
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import torch
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from PIL import Image
@@ -52,6 +53,7 @@ logger = logging.getLogger(__name__)
 PORT = int(os.environ.get("PORT", "5000"))
 MODEL_ID = os.environ.get("QWEN_IMAGE_MODEL", "Qwen/Qwen-Image-2.1")
 CPU_OFFLOAD = os.environ.get("QWEN_CPU_OFFLOAD", "1") == "1"
+API_TOKEN = os.environ.get("QWEN_API_TOKEN", "").strip()
 
 # Fixed allow-list: clients send only the id, never a repo or file name.
 LORA_OPTIONS = {
@@ -123,6 +125,8 @@ def load_pipeline():
 async def lifespan(app: FastAPI):
     """FastAPI lifespan context manager."""
     # Startup
+    if not API_TOKEN:
+        raise RuntimeError("QWEN_API_TOKEN must be configured")
     load_pipeline()
     yield
     # Shutdown
@@ -136,6 +140,10 @@ async def lifespan(app: FastAPI):
 # FASTAPI APP
 # ============================================================================
 app = FastAPI(title="Qwen Image 2.1 API", lifespan=lifespan)
+
+def require_api_token(authorization: Optional[str] = Header(default=None)) -> None:
+    if not hmac.compare_digest(authorization or "", f"Bearer {API_TOKEN}"):
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 # CORS for local dev + frontend
 app.add_middleware(
@@ -238,7 +246,7 @@ def _base64_to_image(b64_str: str) -> Image.Image:
 # ============================================================================
 # ENDPOINTS
 # ============================================================================
-@app.get("/health")
+@app.get("/health", dependencies=[Depends(require_api_token)])
 async def health():
     """Health check endpoint."""
     return {
@@ -253,7 +261,11 @@ async def health():
         "cpu_offload": CPU_OFFLOAD
     }
 
-@app.post("/api/generate", response_model=ImageResponse)
+@app.post(
+    "/api/generate",
+    response_model=ImageResponse,
+    dependencies=[Depends(require_api_token)],
+)
 def generate(req: GenerateRequest):
     """Text-to-image generation."""
     import time
@@ -313,7 +325,11 @@ def generate(req: GenerateRequest):
             error=f"Generation failed: {str(e)}"
         )
 
-@app.post("/api/edit", response_model=ImageResponse)
+@app.post(
+    "/api/edit",
+    response_model=ImageResponse,
+    dependencies=[Depends(require_api_token)],
+)
 def edit(req: EditRequest):
     """Image editing with instruction."""
     import time

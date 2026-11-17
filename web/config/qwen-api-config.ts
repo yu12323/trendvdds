@@ -5,12 +5,14 @@
 
 export interface QwenConfig {
   apiUrl: string;
+  apiToken: string;
   timeout: number;
   maxImageSize: number;
 }
 
 export function getQwenConfig(): QwenConfig {
   const apiUrl = process.env.QWEN_API_URL;
+  const apiToken = process.env.QWEN_API_TOKEN;
   
   if (!apiUrl) {
     throw new Error(
@@ -18,8 +20,13 @@ export function getQwenConfig(): QwenConfig {
     );
   }
 
+  if (!apiToken) {
+    throw new Error('QWEN_API_TOKEN not configured. Set it in the server environment.');
+  }
+
   return {
     apiUrl,
+    apiToken,
     timeout: 280000, // under the 5 min route limit
     maxImageSize: 10 * 1024 * 1024, // 10 MB
   };

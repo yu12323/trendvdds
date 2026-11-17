@@ -20,5 +20,5 @@ python -c "from huggingface_hub import snapshot_download; snapshot_download('Qwe
 
 echo ""
 echo "Setup complete. Start the server with:"
-echo "  cd /workspace && python qwen-pod-server.py"
-echo "Then test: curl http://localhost:5000/health"
+echo "  cd /workspace && QWEN_API_TOKEN=<your-token> python qwen-pod-server.py"
+echo "Then test: curl -H 'Authorization: Bearer <your-token>' http://localhost:5000/health"

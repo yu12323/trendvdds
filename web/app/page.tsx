@@ -103,6 +103,7 @@ export default function HomePage() {
   // Containers count (default 4, user can click +1)
   const [containersCount, setContainersCount] = useState<number>(4);
   const [userPhoto, setUserPhoto] = useState<string | null>(null);
+  const [qwenImagesBySlot, setQwenImagesBySlot] = useState<Record<number, string>>({});
 
   // Base traits template
   const baseTraits: Trait[] = [
@@ -187,7 +188,7 @@ export default function HomePage() {
   const [resultData, setResultData] = useState<{
     images: string[];
     captions: string[];
-    sources: Array<'fooocus' | 'comfyui' | 'original'>;
+    sources: Array<'fooocus' | 'comfyui' | 'qwen' | 'original'>;
     tiktokTitle: string;
   }>({
     images: [],
@@ -292,7 +293,28 @@ export default function HomePage() {
       }
       return updated;
     });
+    setQwenImagesBySlot((prev) => {
+      const updated: Record<number, string> = {};
+      Object.entries(prev).forEach(([key, image]) => {
+        const currentIndex = Number(key);
+        if (currentIndex < index) updated[currentIndex] = image;
+        if (currentIndex > index) updated[currentIndex - 1] = image;
+      });
+      return updated;
+    });
     setContainersCount(nextCount);
+  };
+
+  const handleAcceptQwenImage = (imageIndex: number, image: string) => {
+    setQwenImagesBySlot((prev) => ({ ...prev, [imageIndex]: image }));
+  };
+
+  const handleRemoveQwenImage = (imageIndex: number) => {
+    setQwenImagesBySlot((prev) => {
+      const updated = { ...prev };
+      delete updated[imageIndex];
+      return updated;
+    });
   };
 
   // 3. TOGGLE TRAIT FOR SPECIFIC IMAGE CONTAINER
@@ -395,15 +417,25 @@ export default function HomePage() {
     postType: 'UGLY_TO_BEAUTIFUL' | 'BEAUTIFUL_TO_UGLY';
     captions: string[];
     userPhotoUrl?: string;
+    qwenImagesBySlot: Record<number, string>;
   }, onProgress: (completed: number, total: number) => void) => {
     if (!data.userPhotoUrl) {
       throw new Error('Envie sua foto para gerar versões com IA.');
     }
 
     const imagesToUse: string[] = [];
+    const imageSources: Array<'fooocus' | 'comfyui' | 'qwen' | 'original'> = [];
     let generatedBackend: 'fooocus' | 'comfyui' | null = null;
     
     for (let index = 0; index < containersCount - 1; index++) {
+      const qwenImage = data.qwenImagesBySlot[index];
+      if (qwenImage) {
+        imagesToUse.push(qwenImage);
+        imageSources.push('qwen');
+        onProgress(imagesToUse.length, containersCount - 1);
+        continue;
+      }
+
       const activeTraits = (imageTraitsMap[index] || [])
         .filter((trait) => trait.enabled)
         .map((trait) => trait.name);
@@ -435,20 +467,16 @@ export default function HomePage() {
       }
       generatedBackend = result.backend;
       imagesToUse.push(result.image);
+      imageSources.push(result.backend);
       onProgress(imagesToUse.length, containersCount - 1);
     }
     imagesToUse.push(data.userPhotoUrl);
-    if (!generatedBackend) {
-      throw new Error('Nenhum backend de geração produziu imagens.');
-    }
-    const finalGeneratedBackend = generatedBackend;
+    imageSources.push('original');
 
     setResultData({
       images: imagesToUse.slice(0, data.captions.length),
       captions: data.captions,
-      sources: imagesToUse.map((_, index) =>
-        index === containersCount - 1 ? 'original' : finalGeneratedBackend
-      ),
+      sources: imageSources.slice(0, data.captions.length),
       tiktokTitle:
         data.postType === 'UGLY_TO_BEAUTIFUL'
           ? 'POV: O glow up da trend "Na Verdade" chocou todo mundo 😱 #naverdade #glowup'
@@ -552,6 +580,9 @@ export default function HomePage() {
                 onRemoveContainer={handleRemoveContainer}
                 userPhoto={userPhoto}
                 onUploadUserPhoto={(url) => setUserPhoto(url)}
+                qwenImagesBySlot={qwenImagesBySlot}
+                onAcceptQwenImage={handleAcceptQwenImage}
+                onRemoveQwenImage={handleRemoveQwenImage}
                 onOpenBid={handleOpenBid}
                 onGenerate={handleGeneratePost}
               />
