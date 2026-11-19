@@ -82,6 +82,11 @@ Configure `FOOOCUS_API_URL` e `FOOOCUS_API_KEY` no ambiente do servidor para hab
 
 Para manter Fooocus como backend ativo, configure `IMAGE_GENERATION_BACKEND=fooocus`. A rota direta `/api/generate-image-fooocus` também continua disponível.
 
+#### Usando Cloudflare Workers AI como opção adicional
+O botão separado **Editar esta foto com Cloudflare Workers AI** permite escolher entre [`FLUX.2 Klein 4B`](https://developers.cloudflare.com/workers-ai/models/flux-2-klein-4b/) (padrão) e [`FLUX.2 Klein 9B`](https://developers.cloudflare.com/workers-ai/models/flux-2-klein-9b/). Em **UltraQuality → Editar**, envie a foto da pessoa como referência principal e escolha o tipo da segunda referência: uma página anterior para continuidade ou uma foto da peça de roupa para orientar a troca de vestuário. Para enviar duas imagens, selecione o Klein 9B. A rota envia as imagens como `input_image_0` e `input_image_1`, com até 3 MB no total. O modelo pode não preservar a identidade, a continuidade ou os detalhes da roupa perfeitamente. Confira os preços vigentes no painel da Cloudflare. Configure `CLOUDFLARE_ACCOUNT_ID` e `CLOUDFLARE_API_TOKEN` em `web/.env.local` localmente ou nas variáveis de ambiente do servidor na Vercel. O token precisa ter permissão para Workers AI e é usado somente pela rota `/api/generate-image-cloudflare`; não use o prefixo `NEXT_PUBLIC_`.
+
+Essa opção é independente de `IMAGE_GENERATION_BACKEND`: não substitui nem altera a geração principal via ComfyUI/Fooocus ou a edição Qwen no RunPod. Está disponível em **Criar Post** e em **UltraQuality → Editar**, com confirmação antes de enviar a foto à Cloudflare. A tarifa publicada para o modelo é US$ 0,000059 por bloco de entrada e US$ 0,000287 por bloco de saída de 512×512; uma entrada e saída de 1 MP (quatro blocos cada) equivale a cerca de US$ 0,001384 por imagem, antes da franquia diária de 10.000 neurônios. O valor real depende do modelo, dimensões e uso da conta; consulte a [página de preços](https://developers.cloudflare.com/workers-ai/platform/pricing/).
+
 ### Servidor Fooocus no RunPod
 
 Use um **GPU Pod** (não Serverless), com Docker e uma GPU compatível. Exponha a porta TCP `8888` no Pod e inicie a imagem oficial do Fooocus-API escutando em todas as interfaces e com autenticação habilitada:

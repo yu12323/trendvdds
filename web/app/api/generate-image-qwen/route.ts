@@ -75,13 +75,13 @@ async function generateImage(body: QwenGenerateRequest): Promise<QwenResponse> {
       const error = await response.text();
       return {
         success: false,
-        error: `Qwen API error (${response.status}): ${error}`,
+        error: `UltraQuality API error (${response.status}): ${error}`,
       };
     }
 
     const result = await response.json();
     if (!result.success || !result.image) {
-      return { success: false, error: result.error || 'Qwen API returned no image' };
+      return { success: false, error: result.error || 'UltraQuality API returned no image' };
     }
     return {
       success: true,
@@ -128,13 +128,13 @@ async function editImage(body: QwenEditRequest): Promise<QwenResponse> {
       const error = await response.text();
       return {
         success: false,
-        error: `Qwen API error (${response.status}): ${error}`,
+        error: `UltraQuality API error (${response.status}): ${error}`,
       };
     }
 
     const result = await response.json();
     if (!result.success || !result.image) {
-      return { success: false, error: result.error || 'Qwen API returned no image' };
+      return { success: false, error: result.error || 'UltraQuality API returned no image' };
     }
     return {
       success: true,
@@ -232,7 +232,7 @@ export async function POST(request: NextRequest) {
       execution_time: result.execution_time,
     });
   } catch (error) {
-    console.error('[Qwen API Error]', error);
+    console.error('[UltraQuality API Error]', error);
     return NextResponse.json(
       {
         error:

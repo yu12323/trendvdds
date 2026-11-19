@@ -104,6 +104,7 @@ export default function HomePage() {
   const [containersCount, setContainersCount] = useState<number>(4);
   const [userPhoto, setUserPhoto] = useState<string | null>(null);
   const [qwenImagesBySlot, setQwenImagesBySlot] = useState<Record<number, string>>({});
+  const [cloudflareImagesBySlot, setCloudflareImagesBySlot] = useState<Record<number, string>>({});
 
   // Base traits template
   const baseTraits: Trait[] = [
@@ -186,16 +187,21 @@ export default function HomePage() {
 
   // Results State
   const [resultData, setResultData] = useState<{
+    postId: string;
     images: string[];
     captions: string[];
-    sources: Array<'fooocus' | 'comfyui' | 'qwen' | 'original'>;
+    sources: Array<'fooocus' | 'comfyui' | 'qwen' | 'cloudflare' | 'original'>;
     tiktokTitle: string;
   }>({
+    postId: '',
     images: [],
     captions: [],
     sources: [],
     tiktokTitle: '',
   });
+  const [publishStatus, setPublishStatus] = useState<'idle' | 'publishing' | 'published' | 'error'>('idle');
+  const [publishError, setPublishError] = useState('');
+  const [isPublishing, setIsPublishing] = useState(false);
 
   // Fetch remote suggestions from Supabase
   useEffect(() => {
@@ -302,15 +308,46 @@ export default function HomePage() {
       });
       return updated;
     });
+    setCloudflareImagesBySlot((prev) => {
+      const updated: Record<number, string> = {};
+      Object.entries(prev).forEach(([key, image]) => {
+        const currentIndex = Number(key);
+        if (currentIndex < index) updated[currentIndex] = image;
+        if (currentIndex > index) updated[currentIndex - 1] = image;
+      });
+      return updated;
+    });
     setContainersCount(nextCount);
   };
 
   const handleAcceptQwenImage = (imageIndex: number, image: string) => {
+    setCloudflareImagesBySlot((prev) => {
+      const updated = { ...prev };
+      delete updated[imageIndex];
+      return updated;
+    });
     setQwenImagesBySlot((prev) => ({ ...prev, [imageIndex]: image }));
+  };
+
+  const handleAcceptCloudflareImage = (imageIndex: number, image: string) => {
+    setQwenImagesBySlot((prev) => {
+      const updated = { ...prev };
+      delete updated[imageIndex];
+      return updated;
+    });
+    setCloudflareImagesBySlot((prev) => ({ ...prev, [imageIndex]: image }));
   };
 
   const handleRemoveQwenImage = (imageIndex: number) => {
     setQwenImagesBySlot((prev) => {
+      const updated = { ...prev };
+      delete updated[imageIndex];
+      return updated;
+    });
+  };
+
+  const handleRemoveCloudflareImage = (imageIndex: number) => {
+    setCloudflareImagesBySlot((prev) => {
       const updated = { ...prev };
       delete updated[imageIndex];
       return updated;
@@ -413,18 +450,93 @@ export default function HomePage() {
   };
 
   // Generate with AI handler
+  const saveGeneratedPost = async (post: typeof resultData) => {
+    setIsPublishing(true);
+    setPublishError('');
+    setPublishStatus('publishing');
+
+    try {
+      const imageUrls: string[] = [];
+      for (let index = 0; index < post.images.length; index++) {
+        const response = await fetch(post.images[index]);
+        if (!response.ok) {
+          throw new Error(`Não foi possível preparar a imagem ${index + 1} para publicação.`);
+        }
+        const imageBlob = await response.blob();
+        const extension =
+          imageBlob.type === 'image/jpeg' ? 'jpg' :
+          imageBlob.type === 'image/webp' ? 'webp' :
+          imageBlob.type === 'image/png' ? 'png' : null;
+        if (!extension) {
+          throw new Error(`A imagem ${index + 1} está em um formato não suportado.`);
+        }
+
+        const path = `posts/${post.postId}/${index + 1}.${extension}`;
+        const { error: uploadError } = await supabase.storage
+          .from('naverdade-images')
+          .upload(path, imageBlob, {
+            cacheControl: '3600',
+            contentType: imageBlob.type,
+            upsert: true,
+          });
+        if (uploadError) throw uploadError;
+
+        const { data: publicUrlData } = supabase.storage
+          .from('naverdade-images')
+          .getPublicUrl(path);
+        imageUrls.push(publicUrlData.publicUrl);
+      }
+
+      const authorName = currentUser?.displayName || 'Criador Visitante';
+      const authorHandle = currentUser
+        ? `@${currentUser.email.split('@')[0]}`
+        : '@criador.naverdade';
+      const { error: postError } = await supabase.from('posts').upsert(
+        {
+          id: post.postId,
+          author_name: authorName,
+          author_handle: authorHandle,
+          caption: post.tiktokTitle,
+          tiktok_title: post.tiktokTitle,
+          step_captions: post.captions,
+          images_urls: imageUrls,
+          likes_count: 0,
+          created_at: new Date().toISOString(),
+        },
+        { onConflict: 'id' }
+      );
+      if (postError) throw postError;
+      setPublishStatus('published');
+    } catch (error) {
+      console.error('Não foi possível publicar o post no feed:', error);
+      setPublishStatus('error');
+      setPublishError(
+        error instanceof Error
+          ? error.message
+          : 'Não foi possível publicar no feed. Tente novamente.'
+      );
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
+  const handleRetryPublish = () => {
+    if (resultData.postId) void saveGeneratedPost(resultData);
+  };
+
   const handleGeneratePost = async (data: {
     postType: 'UGLY_TO_BEAUTIFUL' | 'BEAUTIFUL_TO_UGLY';
     captions: string[];
     userPhotoUrl?: string;
     qwenImagesBySlot: Record<number, string>;
+    cloudflareImagesBySlot: Record<number, string>;
   }, onProgress: (completed: number, total: number) => void) => {
     if (!data.userPhotoUrl) {
       throw new Error('Envie sua foto para gerar versões com IA.');
     }
 
     const imagesToUse: string[] = [];
-    const imageSources: Array<'fooocus' | 'comfyui' | 'qwen' | 'original'> = [];
+    const imageSources: Array<'fooocus' | 'comfyui' | 'qwen' | 'cloudflare' | 'original'> = [];
     let generatedBackend: 'fooocus' | 'comfyui' | null = null;
     
     for (let index = 0; index < containersCount - 1; index++) {
@@ -432,6 +544,14 @@ export default function HomePage() {
       if (qwenImage) {
         imagesToUse.push(qwenImage);
         imageSources.push('qwen');
+        onProgress(imagesToUse.length, containersCount - 1);
+        continue;
+      }
+
+      const cloudflareImage = data.cloudflareImagesBySlot[index];
+      if (cloudflareImage) {
+        imagesToUse.push(cloudflareImage);
+        imageSources.push('cloudflare');
         onProgress(imagesToUse.length, containersCount - 1);
         continue;
       }
@@ -473,7 +593,8 @@ export default function HomePage() {
     imagesToUse.push(data.userPhotoUrl);
     imageSources.push('original');
 
-    setResultData({
+    const generatedPost = {
+      postId: crypto.randomUUID(),
       images: imagesToUse.slice(0, data.captions.length),
       captions: data.captions,
       sources: imageSources.slice(0, data.captions.length),
@@ -481,25 +602,14 @@ export default function HomePage() {
         data.postType === 'UGLY_TO_BEAUTIFUL'
           ? 'POV: O glow up da trend "Na Verdade" chocou todo mundo 😱 #naverdade #glowup'
           : 'POV: A ilusão da internet quando você descobre a verdade 😂 #naverdade #trend',
-    });
+    };
+    setResultData(generatedPost);
+    setPublishStatus('publishing');
+    setPublishError('');
     setShowResults(true);
     setPostsCreated((prev) => prev + 1);
     window.scrollTo({ top: 0, behavior: 'smooth' });
-
-    // Also persist post to Supabase
-    try {
-      await supabase.from('posts').insert({
-        author_name: 'criador.naverdade',
-        author_handle: '@criador',
-        caption: data.captions.join(' | '),
-        step_captions: data.captions,
-        image_urls: imagesToUse.slice(0, data.captions.length),
-        likes_count: 0,
-        created_at: new Date().toISOString(),
-      });
-    } catch (e) {
-      console.warn('Supabase post create fallback:', e);
-    }
+    await saveGeneratedPost(generatedPost);
   };
 
   // Email subscribe
@@ -548,6 +658,10 @@ export default function HomePage() {
         {showResults ? (
           <ResultsView
             resultData={resultData}
+            publishStatus={publishStatus}
+            publishError={publishError}
+            isPublishing={isPublishing}
+            onRetryPublish={handleRetryPublish}
             onBack={() => setShowResults(false)}
             onPublish={() => {
               setShowResults(false);
@@ -583,6 +697,9 @@ export default function HomePage() {
                 qwenImagesBySlot={qwenImagesBySlot}
                 onAcceptQwenImage={handleAcceptQwenImage}
                 onRemoveQwenImage={handleRemoveQwenImage}
+                cloudflareImagesBySlot={cloudflareImagesBySlot}
+                onAcceptCloudflareImage={handleAcceptCloudflareImage}
+                onRemoveCloudflareImage={handleRemoveCloudflareImage}
                 onOpenBid={handleOpenBid}
                 onGenerate={handleGeneratePost}
               />

@@ -2,6 +2,11 @@
 
 import React, { useState, useRef } from 'react';
 import {
+  CLOUDFLARE_AI_MODELS,
+  DEFAULT_CLOUDFLARE_AI_MODEL,
+  type CloudflareAiModelId,
+} from '../config/cloudflare-ai-models';
+import {
   Sparkles,
   ArrowRight,
   Eye,
@@ -40,6 +45,7 @@ interface CreatePostViewProps {
     captions: string[];
     userPhotoUrl?: string;
     qwenImagesBySlot: Record<number, string>;
+    cloudflareImagesBySlot: Record<number, string>;
   }, onProgress: (completed: number, total: number) => void) => Promise<void>;
   onOpenBid: (auctionId: string) => void;
   onOpenAddTrait: () => void;
@@ -56,12 +62,21 @@ interface CreatePostViewProps {
   qwenImagesBySlot: Record<number, string>;
   onAcceptQwenImage: (imageIndex: number, image: string) => void;
   onRemoveQwenImage: (imageIndex: number) => void;
+  cloudflareImagesBySlot: Record<number, string>;
+  onAcceptCloudflareImage: (imageIndex: number, image: string) => void;
+  onRemoveCloudflareImage: (imageIndex: number) => void;
 }
 
 interface QwenApiResponse {
   success: boolean;
   image?: string;
   seed?: number;
+  error?: string;
+}
+
+interface CloudflareAiApiResponse {
+  success: boolean;
+  image?: string;
   error?: string;
 }
 
@@ -82,6 +97,9 @@ export default function CreatePostView({
   qwenImagesBySlot,
   onAcceptQwenImage,
   onRemoveQwenImage,
+  cloudflareImagesBySlot,
+  onAcceptCloudflareImage,
+  onRemoveCloudflareImage,
 }: CreatePostViewProps) {
   const [postType, setPostType] = useState<'UGLY_TO_BEAUTIFUL' | 'BEAUTIFUL_TO_UGLY'>(
     'UGLY_TO_BEAUTIFUL'
@@ -106,9 +124,18 @@ export default function CreatePostView({
   const [isGeneratingQwen, setIsGeneratingQwen] = useState(false);
   const [qwenError, setQwenError] = useState('');
   const [qwenReferenceConfirmed, setQwenReferenceConfirmed] = useState(false);
+  const [isGeneratingCloudflare, setIsGeneratingCloudflare] = useState(false);
+  const [cloudflareError, setCloudflareError] = useState('');
+  const [cloudflareReferenceConfirmed, setCloudflareReferenceConfirmed] = useState(false);
+  const [cloudflareModel, setCloudflareModel] =
+    useState<CloudflareAiModelId>(DEFAULT_CLOUDFLARE_AI_MODEL);
   const [pendingQwenImage, setPendingQwenImage] = useState<{
     image: string;
     seed?: number;
+    targetIndex: number;
+  } | null>(null);
+  const [pendingCloudflareImage, setPendingCloudflareImage] = useState<{
+    image: string;
     targetIndex: number;
   } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -141,10 +168,72 @@ export default function CreatePostView({
     if (qwenImagesBySlot[idx]) {
       return qwenImagesBySlot[idx];
     }
+    if (cloudflareImagesBySlot[idx]) {
+      return cloudflareImagesBySlot[idx];
+    }
     if (userPhoto) {
       return userPhoto;
     }
     return defaultPhotos[idx % defaultPhotos.length];
+  };
+
+  const handleCloudflareRequest = async () => {
+    const targetIndex = selectedThumb;
+    if (targetIndex === userPhotoIndex) {
+      setCloudflareError('O último espaço fica reservado para sua foto original. Escolha outro espaço.');
+      return;
+    }
+    if (!userPhoto) {
+      setCloudflareError('Envie sua foto antes de editar com Cloudflare Workers AI.');
+      return;
+    }
+    if (!cloudflareReferenceConfirmed) {
+      setCloudflareError('Confirme que deseja enviar sua foto original à Cloudflare.');
+      return;
+    }
+
+    const direction =
+      postType === 'UGLY_TO_BEAUTIFUL'
+        ? 'de uma aparência simples para uma mais bonita'
+        : 'de uma aparência bonita para uma mais desleixada';
+    const traitsText = qwenTargetTraits.length > 0
+      ? qwenTargetTraits.join(', ')
+      : 'uma aparência natural e coerente com a transformação';
+    const captionContext = captions[targetIndex]?.trim();
+    const captionInstruction = captionContext
+      ? ` Use esta legenda apenas como contexto, sem escrever palavras na imagem: "${captionContext}".`
+      : '';
+    const prompt = `Edite a foto original para uma transformação ${direction}. Use a mesma pessoa da foto como referência e preserve rigorosamente sua identidade: mantenha o mesmo rosto, formato facial, olhos, nariz, boca, tom de pele, idade aparente, gênero, expressão, pose, enquadramento, iluminação e fundo. Não substitua a pessoa nem invente outro rosto. Altere somente estas características solicitadas: ${traitsText}.${captionInstruction} Preserve todos os demais elementos da foto. Não inclua texto, letras ou marca d'água.`;
+
+    setCloudflareError('');
+    setIsGeneratingCloudflare(true);
+    try {
+      const response = await fetch('/api/generate-image-cloudflare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: userPhoto, prompt, model: cloudflareModel }),
+      });
+      const result = (await response.json()) as CloudflareAiApiResponse;
+      if (!response.ok || result.success !== true || typeof result.image !== 'string') {
+        throw new Error(result.error || 'Não foi possível gerar a imagem com Cloudflare Workers AI.');
+      }
+      setPendingCloudflareImage({ image: result.image, targetIndex });
+    } catch (error) {
+      setCloudflareError(
+        error instanceof Error ? error.message : 'Falha ao falar com Cloudflare Workers AI.'
+      );
+    } finally {
+      setIsGeneratingCloudflare(false);
+    }
+  };
+
+  const handleAcceptCloudflareImage = () => {
+    if (!pendingCloudflareImage) return;
+    onAcceptCloudflareImage(pendingCloudflareImage.targetIndex, pendingCloudflareImage.image);
+    setSelectedThumb(pendingCloudflareImage.targetIndex);
+    setPendingCloudflareImage(null);
+    setCloudflareReferenceConfirmed(false);
+    setCloudflareError('');
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -165,6 +254,8 @@ export default function CreatePostView({
     reader.onload = () => {
       if (typeof reader.result === 'string') {
         onUploadUserPhoto(reader.result);
+        setQwenReferenceConfirmed(false);
+        setCloudflareReferenceConfirmed(false);
         setGenerationError('');
       } else {
         setGenerationError('Não foi possível ler a foto. Tente outro arquivo.');
@@ -228,6 +319,7 @@ export default function CreatePostView({
         captions: captions.slice(0, containersCount),
         userPhotoUrl: userPhoto || undefined,
         qwenImagesBySlot,
+        cloudflareImagesBySlot,
       }, (completed, total) => {
         setGenerationProgress(`Servidor concluiu ${completed} de ${total} imagens.`);
       });
@@ -256,12 +348,12 @@ export default function CreatePostView({
     }
 
     if (!qwenReferenceImage) {
-      setQwenError('Envie sua foto antes de editar com o Qwen.');
+      setQwenError('Envie sua foto antes de editar com o UltraQuality.');
       return;
     }
 
     if (!qwenReferenceConfirmed) {
-      setQwenError('Confirme que deseja enviar sua foto original como referência para o Qwen.');
+      setQwenError('Confirme que deseja enviar sua foto original como referência para o UltraQuality.');
       return;
     }
 
@@ -292,7 +384,7 @@ export default function CreatePostView({
       });
       const result = (await response.json()) as QwenApiResponse;
       if (!response.ok || result.success !== true || typeof result.image !== 'string') {
-        throw new Error(result.error || 'Não foi possível gerar a imagem com Qwen.');
+        throw new Error(result.error || 'Não foi possível gerar a imagem com UltraQuality.');
       }
 
       setPendingQwenImage({
@@ -301,7 +393,7 @@ export default function CreatePostView({
         targetIndex,
       });
     } catch (error) {
-      setQwenError(error instanceof Error ? error.message : 'Falha ao falar com o serviço Qwen.');
+      setQwenError(error instanceof Error ? error.message : 'Falha ao falar com o serviço UltraQuality.');
     } finally {
       setIsGeneratingQwen(false);
     }
@@ -423,7 +515,11 @@ export default function CreatePostView({
         {/* The uploaded photo is the source image for all generated containers. */}
         {qwenImagesBySlot[selectedThumb] ? (
           <div className="absolute top-3 left-3 bg-violet-700 text-white text-[10px] font-black uppercase px-2.5 py-1 rounded-full shadow-md">
-            Imagem Qwen aceita
+            Imagem UltraQuality aceita
+          </div>
+        ) : cloudflareImagesBySlot[selectedThumb] ? (
+          <div className="absolute top-3 left-3 bg-sky-700 text-white text-[10px] font-black uppercase px-2.5 py-1 rounded-full shadow-md">
+            Imagem Cloudflare aceita
           </div>
         ) : userPhoto ? (
           <div className="absolute top-3 left-3 bg-[#00A86B] text-white text-[10px] font-black uppercase px-2.5 py-1 rounded-full shadow-md flex items-center gap-1">
@@ -467,14 +563,14 @@ export default function CreatePostView({
 
       <section className="rounded-2xl border border-violet-200 bg-violet-50/70 p-4 space-y-3">
         <div>
-          <h3 className="font-bold text-sm text-gray-900">Gerar imagem com Qwen</h3>
+          <h3 className="font-bold text-sm text-gray-900">Gerar imagem com UltraQuality</h3>
           <p className="mt-1 text-xs text-gray-600">
-            Edita sua foto enviada com os traços ativos e a legenda como contexto. Marque a confirmação para enviá-la ao Qwen.
+            Edita sua foto enviada com os traços ativos e a legenda como contexto. Marque a confirmação para enviá-la ao UltraQuality.
           </p>
         </div>
         {!isQwenTargetAvailable ? (
           <p className="text-xs text-amber-800">
-            O último espaço fica reservado para sua foto original. Selecione outro espaço para usar o Qwen.
+            O último espaço fica reservado para sua foto original. Selecione outro espaço para usar o UltraQuality.
           </p>
         ) : (
           <>
@@ -484,7 +580,7 @@ export default function CreatePostView({
               disabled={isGeneratingQwen}
               className="w-full rounded-xl bg-violet-700 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-violet-800 disabled:cursor-wait disabled:opacity-60"
             >
-              {isGeneratingQwen ? 'Gerando prévia com Qwen…' : 'Gerar com Qwen'}
+              {isGeneratingQwen ? 'Gerando prévia com UltraQuality…' : 'Gerar com UltraQuality'}
             </button>
             {qwenReferenceImage ? (
               <div className="space-y-2 rounded-xl border border-violet-200 bg-white p-3">
@@ -500,7 +596,7 @@ export default function CreatePostView({
                     className="mt-0.5 accent-violet-700"
                   />
                   <span>
-                    Quero enviar minha foto original ao Qwen para editar esta variação.
+                    Quero enviar minha foto original ao UltraQuality para editar esta variação.
                   </span>
                 </label>
                 <button
@@ -509,7 +605,7 @@ export default function CreatePostView({
                   disabled={isGeneratingQwen || !qwenReferenceConfirmed}
                   className="w-full rounded-xl border border-violet-300 px-4 py-2 text-sm font-semibold text-violet-800 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {isGeneratingQwen ? 'Editando com Qwen…' : 'Editar esta foto com Qwen'}
+                  {isGeneratingQwen ? 'Editando com UltraQuality…' : 'Editar esta foto com UltraQuality'}
                 </button>
               </div>
             ) : null}
@@ -543,7 +639,7 @@ export default function CreatePostView({
             </div>
             <img
               src={pendingQwenImage.image}
-              alt={`Prévia Qwen para a foto ${pendingQwenImage.targetIndex + 1}`}
+              alt={`Prévia UltraQuality para a foto ${pendingQwenImage.targetIndex + 1}`}
               className="max-h-80 w-full rounded-lg bg-gray-100 object-contain"
             />
             <div className="grid grid-cols-2 gap-2">
@@ -581,7 +677,134 @@ export default function CreatePostView({
             disabled={isGeneratingQwen}
             className="w-full rounded-xl border border-gray-300 bg-white px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-100 disabled:opacity-50"
           >
-            Remover imagem Qwen desta foto
+            Remover imagem UltraQuality desta foto
+          </button>
+        ) : null}
+      </section>
+
+      <section className="rounded-2xl border border-sky-200 bg-sky-50/70 p-4 space-y-3">
+        <div>
+          <h3 className="font-bold text-sm text-gray-900">Gerar imagem com Cloudflare Workers AI</h3>
+          <p className="mt-1 text-xs text-gray-600">
+            Selecione o modelo para editar sua foto. O 9B suporta múltiplas referências, mas esta tela envia uma foto. Nenhum modelo garante preservar a identidade.
+          </p>
+        </div>
+        <label className="block space-y-1 text-xs font-semibold text-gray-700">
+          Modelo
+          <select
+            value={cloudflareModel}
+            onChange={(event) => {
+              const selectedModel = Object.values(CLOUDFLARE_AI_MODELS).find(
+                (model) => model.id === event.target.value
+              );
+              if (selectedModel) setCloudflareModel(selectedModel.id);
+            }}
+            disabled={isGeneratingCloudflare}
+            className="w-full rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm font-medium text-gray-900 disabled:opacity-60"
+          >
+            {Object.values(CLOUDFLARE_AI_MODELS).map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {!isQwenTargetAvailable ? (
+          <p className="text-xs text-amber-800">
+            O último espaço fica reservado para sua foto original. Selecione outra foto para usar Cloudflare Workers AI.
+          </p>
+        ) : !userPhoto ? (
+          <p className="text-xs text-amber-800">Envie sua foto para habilitar a geração com Cloudflare Workers AI.</p>
+        ) : (
+            <label className="flex items-start gap-2 rounded-xl border border-sky-200 bg-white p-3 text-xs text-gray-700">
+              <input
+                type="checkbox"
+                checked={cloudflareReferenceConfirmed}
+                onChange={(event) => {
+                  setCloudflareReferenceConfirmed(event.target.checked);
+                  setCloudflareError('');
+                }}
+                disabled={isGeneratingCloudflare}
+                className="mt-0.5 accent-sky-700"
+              />
+              <span>Quero enviar minha foto original à Cloudflare para editar esta variação.</span>
+            </label>
+        )}
+        <button
+          type="button"
+          onClick={handleCloudflareRequest}
+          disabled={
+            isGeneratingCloudflare ||
+            !userPhoto ||
+            !isQwenTargetAvailable ||
+            !cloudflareReferenceConfirmed
+          }
+          className="w-full rounded-xl bg-sky-700 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {isGeneratingCloudflare ? 'Gerando prévia com Cloudflare…' : 'Editar esta foto com Cloudflare'}
+        </button>
+        {isGeneratingCloudflare ? (
+          <p role="status" aria-live="polite" className="text-xs text-sky-800">
+            Cloudflare Workers AI está gerando a prévia. Isso pode levar alguns minutos.
+          </p>
+        ) : null}
+        {cloudflareError ? <p role="alert" className="text-xs text-red-700">{cloudflareError}</p> : null}
+        {pendingCloudflareImage ? (
+          <div className="space-y-3 rounded-xl border border-sky-200 bg-white p-3">
+            <p className="text-xs font-semibold text-gray-800">
+              Prévia Cloudflare para a Foto {pendingCloudflareImage.targetIndex + 1}
+            </p>
+            {cloudflareImagesBySlot[pendingCloudflareImage.targetIndex] ? (
+              <button
+                type="button"
+                onClick={() => onRemoveCloudflareImage(pendingCloudflareImage.targetIndex)}
+                disabled={isGeneratingCloudflare}
+                className="text-xs font-semibold text-red-700 hover:underline disabled:opacity-50"
+              >
+                Restaurar imagem anterior
+              </button>
+            ) : null}
+            <img
+              src={pendingCloudflareImage.image}
+              alt={`Prévia Cloudflare para a foto ${pendingCloudflareImage.targetIndex + 1}`}
+              className="max-h-80 w-full rounded-lg bg-gray-100 object-contain"
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={handleAcceptCloudflareImage}
+                disabled={isGeneratingCloudflare}
+                className="rounded-xl bg-[#00A86B] px-3 py-2 text-xs font-bold text-white hover:bg-[#046A4E] disabled:opacity-50"
+              >
+                Aceitar na Foto {pendingCloudflareImage.targetIndex + 1}
+              </button>
+              <button
+                type="button"
+                onClick={handleCloudflareRequest}
+                disabled={isGeneratingCloudflare || !cloudflareReferenceConfirmed}
+                className="rounded-xl border border-sky-300 px-3 py-2 text-xs font-bold text-sky-800 hover:bg-sky-100 disabled:opacity-50"
+              >
+                Gerar outra prévia
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => setPendingCloudflareImage(null)}
+              disabled={isGeneratingCloudflare}
+              className="w-full py-1 text-xs font-semibold text-gray-500 hover:text-gray-800 disabled:opacity-50"
+            >
+              Descartar prévia
+            </button>
+          </div>
+        ) : null}
+        {cloudflareImagesBySlot[selectedThumb] ? (
+          <button
+            type="button"
+            onClick={() => onRemoveCloudflareImage(selectedThumb)}
+            disabled={isGeneratingCloudflare}
+            className="w-full rounded-xl border border-gray-300 bg-white px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+          >
+            Remover imagem Cloudflare desta foto
           </button>
         ) : null}
       </section>
@@ -598,7 +821,9 @@ export default function CreatePostView({
               onClick={() => {
                 setSelectedThumb(idx);
                 setQwenReferenceConfirmed(false);
+                setCloudflareReferenceConfirmed(false);
                 setQwenError('');
+                setCloudflareError('');
               }}
               className="flex flex-col items-center flex-shrink-0 cursor-pointer"
             >

@@ -23,7 +23,7 @@ export default function Navbar({ currentTab, onSelectTab, avatarUrl }: NavbarPro
     { id: 'home', label: 'Início', icon: Home },
     { id: 'feed', label: 'Feed', icon: Flame },
     { id: 'create', label: 'Criar', icon: Plus, prominent: true },
-    { id: 'qwen', label: 'Qwen', icon: Sparkles },
+    { id: 'qwen', label: 'UltraQuality', icon: Sparkles },
     { id: 'auctions', label: 'Leilões', icon: Gavel },
     { id: 'profile', label: 'Perfil', icon: User },
   ];

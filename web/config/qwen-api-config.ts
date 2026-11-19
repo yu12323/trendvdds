@@ -1,5 +1,5 @@
 /**
- * Qwen Image 2.1 API Configuration
+ * UltraQuality image generation API configuration
  * Server-side only (never exposed to frontend)
  */
 

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Heart,
   MessageCircle,
@@ -44,6 +44,24 @@ export interface PostComment {
   authorAvatar?: string;
   content: string;
   timeAgo: string;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+function getTimeAgo(value: unknown): string {
+  if (typeof value !== 'string') return 'Recente';
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return 'Recente';
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60_000));
+  if (minutes < 1) return 'Agora';
+  if (minutes < 60) return `há ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `há ${hours}h`;
+  return `há ${Math.floor(hours / 24)}d`;
 }
 
 interface FeedViewProps {
@@ -134,6 +152,64 @@ export const FeedView: React.FC<FeedViewProps> = ({
       isFavorited: true,
     },
   ]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const loadSavedPosts = async () => {
+      const { data, error } = await supabase
+        .from('posts')
+        .select('id, author_name, author_handle, caption, tiktok_title, step_captions, images_urls, likes_count, created_at')
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (error) {
+        console.error('Não foi possível carregar as publicações salvas:', error);
+        return;
+      }
+
+      const savedPosts: FeedPost[] = (data || []).flatMap((row) => {
+        const images = stringArray(row.images_urls);
+        if (images.length === 0) return [];
+        const savedCaptions = stringArray(row.step_captions);
+        const handle = typeof row.author_handle === 'string' ? row.author_handle : '';
+        const author =
+          handle.replace(/^@/, '') ||
+          (typeof row.author_name === 'string' ? row.author_name : 'Criador');
+        const description =
+          (typeof row.tiktok_title === 'string' && row.tiktok_title.trim()) ||
+          (typeof row.caption === 'string' && row.caption.trim()) ||
+          'Post da trend Na Verdade';
+
+        return [{
+          id: String(row.id),
+          author,
+          avatar: '/logo.jpg',
+          location: 'Feed Na Verdade',
+          verified: false,
+          images,
+          captions: images.map((_, index) => savedCaptions[index] || ''),
+          description,
+          likes: typeof row.likes_count === 'number' ? row.likes_count : 0,
+          comments: 0,
+          timeAgo: getTimeAgo(row.created_at),
+          isLiked: false,
+          isFavorited: false,
+        }];
+      });
+
+      if (isMounted && savedPosts.length > 0) {
+        setPosts((previousPosts) => {
+          const savedIds = new Set(savedPosts.map((post) => post.id));
+          return [...savedPosts, ...previousPosts.filter((post) => !savedIds.has(post.id))];
+        });
+      }
+    };
+
+    void loadSavedPosts();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Inline comments state per post
   const [expandedCommentsMap, setExpandedCommentsMap] = useState<Record<string, boolean>>({});

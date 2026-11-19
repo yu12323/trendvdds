@@ -182,9 +182,36 @@ INSERT INTO storage.buckets (id, name, public)
 VALUES ('naverdade-images', 'naverdade-images', true)
 ON CONFLICT (id) DO UPDATE SET public = true;
 
+UPDATE storage.buckets
+SET file_size_limit = 20971520,
+    allowed_mime_types = ARRAY['image/jpeg', 'image/png', 'image/webp']
+WHERE id = 'naverdade-images';
+
 -- Políticas do Storage
 CREATE POLICY "Public Storage Read" ON storage.objects
 FOR SELECT USING (bucket_id = 'naverdade-images');
+
+DROP POLICY IF EXISTS "Public Upload Generated Post Images" ON storage.objects;
+CREATE POLICY "Public Upload Generated Post Images" ON storage.objects
+FOR INSERT TO anon, authenticated
+WITH CHECK (
+    bucket_id = 'naverdade-images'
+    AND (storage.foldername(name))[1] = 'posts'
+    AND lower(name) LIKE ANY (ARRAY['%.jpg', '%.jpeg', '%.png', '%.webp'])
+);
+
+DROP POLICY IF EXISTS "Public Update Generated Post Images" ON storage.objects;
+CREATE POLICY "Public Update Generated Post Images" ON storage.objects
+FOR UPDATE TO anon, authenticated
+USING (
+    bucket_id = 'naverdade-images'
+    AND (storage.foldername(name))[1] = 'posts'
+)
+WITH CHECK (
+    bucket_id = 'naverdade-images'
+    AND (storage.foldername(name))[1] = 'posts'
+    AND lower(name) LIKE ANY (ARRAY['%.jpg', '%.jpeg', '%.png', '%.webp'])
+);
 
 DROP POLICY IF EXISTS "Public Storage Insert" ON storage.objects;
 CREATE POLICY "Authenticated users upload own avatar" ON storage.objects

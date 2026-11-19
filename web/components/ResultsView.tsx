@@ -6,11 +6,16 @@ import { ArrowLeft, Copy, Check, Download, Share2, HelpCircle, Clock } from 'luc
 interface ResultsViewProps {
   onBack: () => void;
   onPublish: () => void;
+  onRetryPublish: () => void;
   onOpenBid: (auctionId: string) => void;
+  publishStatus: 'idle' | 'publishing' | 'published' | 'error';
+  publishError: string;
+  isPublishing: boolean;
   resultData: {
+    postId: string;
     images: string[];
     captions: string[];
-    sources: Array<'fooocus' | 'comfyui' | 'qwen' | 'original'>;
+    sources: Array<'fooocus' | 'comfyui' | 'qwen' | 'cloudflare' | 'original'>;
     tiktokTitle: string;
   };
 }
@@ -18,12 +23,14 @@ interface ResultsViewProps {
 export default function ResultsView({
   onBack,
   onPublish,
+  onRetryPublish,
   onOpenBid,
+  publishStatus,
+  publishError,
+  isPublishing,
   resultData,
 }: ResultsViewProps) {
   const [copied, setCopied] = useState(false);
-  const [autoEmail, setAutoEmail] = useState('');
-  const [emailSaved, setEmailSaved] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadSaved, setDownloadSaved] = useState(false);
   const generatedSources = resultData.sources.filter((source) => source !== 'original');
@@ -34,7 +41,9 @@ export default function ResultsView({
     distinctGeneratedSources.length > 1
       ? 'IA'
       : distinctGeneratedSources[0] === 'qwen'
-      ? 'Qwen'
+      ? 'UltraQuality'
+      : distinctGeneratedSources[0] === 'cloudflare'
+      ? 'Cloudflare Workers AI'
       : distinctGeneratedSources[0] === 'comfyui'
       ? 'ComfyUI'
       : distinctGeneratedSources[0] === 'fooocus'
@@ -45,14 +54,6 @@ export default function ResultsView({
     navigator.clipboard.writeText(resultData.tiktokTitle);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-  };
-
-  const handleSaveAutoPost = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (autoEmail) {
-      setEmailSaved(true);
-      setTimeout(() => setEmailSaved(false), 3000);
-    }
   };
 
   // REAL BROWSER DOWNLOAD FUNCTION (FIXED)
@@ -151,7 +152,9 @@ export default function ResultsView({
                 ? 'Foto original'
                 : `Gerada pelo ${
                     resultData.sources[idx] === 'qwen'
-                      ? 'Qwen'
+                      ? 'UltraQuality'
+                      : resultData.sources[idx] === 'cloudflare'
+                      ? 'Cloudflare Workers AI'
                       : resultData.sources[idx] === 'comfyui'
                       ? 'ComfyUI'
                       : 'Fooocus'
@@ -230,31 +233,45 @@ export default function ResultsView({
         </div>
       </div>
 
-      {/* 4. POSTAGEM AUTOMÁTICA EM BREVE - DEIXE SEU EMAIL */}
-      <div className="space-y-1.5">
-        <div className="py-1 px-3 bg-gray-100 rounded-lg text-center text-xs font-semibold text-gray-600">
-          Postagem automática em breve – deixe seu email
-        </div>
-        <form onSubmit={handleSaveAutoPost} className="flex gap-2">
-          <input
-            type="email"
-            required
-            placeholder="seu@email.com"
-            value={autoEmail}
-            onChange={(e) => setAutoEmail(e.target.value)}
-            className="flex-1 px-3 py-2 text-xs border border-gray-200 rounded-xl focus:outline-hidden focus:border-[#00A86B]"
-          />
-          <button
-            type="submit"
-            className="px-4 py-2 bg-[#00A86B] hover:bg-[#046A4E] text-white font-bold text-xs rounded-xl shadow-xs transition"
-          >
-            {emailSaved ? 'Salvo! ✓' : 'Salvar'}
-          </button>
-        </form>
-      </div>
-
-      {/* 5. BOTÕES: BAIXAR IMAGENS E PUBLICAR NO FEED */}
+      {/* Download and required feed publication */}
       <div className="space-y-2 pt-1">
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+          <label className="flex items-start gap-2 text-xs font-semibold text-gray-800">
+            <input
+              type="checkbox"
+              checked
+              disabled
+              readOnly
+              aria-label="Publicar no Feed Na Verdade"
+              className="mt-0.5 accent-emerald-600"
+            />
+            <span>Postar no Feed Na Verdade (obrigatório)</span>
+          </label>
+          <p className="mt-1 pl-5 text-[11px] text-gray-600">
+            A publicação inclui todas as imagens, inclusive a foto original, e ficará visível no feed.
+          </p>
+          {publishStatus === 'published' ? (
+            <p role="status" className="mt-2 pl-5 text-xs font-semibold text-emerald-800">
+              Publicado no Feed Na Verdade.
+            </p>
+          ) : isPublishing ? (
+            <p role="status" aria-live="polite" className="mt-2 pl-5 text-xs text-emerald-800">
+              Salvando imagens e publicando no feed…
+            </p>
+          ) : publishStatus === 'error' ? (
+            <div className="mt-2 pl-5">
+              <p role="alert" className="text-xs text-red-700">{publishError}</p>
+              <button
+                type="button"
+                onClick={onRetryPublish}
+                className="mt-2 text-xs font-bold text-emerald-800 underline"
+              >
+                Tentar publicar novamente
+              </button>
+            </div>
+          ) : null}
+        </div>
+
         <button
           onClick={handleDownloadAll}
           disabled={isDownloading}
@@ -270,10 +287,11 @@ export default function ResultsView({
 
         <button
           onClick={onPublish}
-          className="w-full py-3 bg-[#00A86B] hover:bg-[#046A4E] text-white font-bold text-xs rounded-xl shadow-md flex items-center justify-center gap-1.5 transition"
+          disabled={publishStatus !== 'published' || isPublishing}
+          className="w-full py-3 bg-[#00A86B] hover:bg-[#046A4E] text-white font-bold text-xs rounded-xl shadow-md flex items-center justify-center gap-1.5 transition disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Share2 className="w-4 h-4" />
-          Publicar no Feed do App (Sem Login)
+          Ver no Feed Na Verdade
         </button>
       </div>
     </div>
